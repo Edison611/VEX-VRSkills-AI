@@ -7,11 +7,11 @@ This is only for the VEX High Stakes Skills with many features not implemented y
 
 # AI Features v1.0 (Q-Learning)
 ## Observations:
-- x
-- y
-- heading
-- # of rings
-- # of stakes
+- X
+- Y
+- Heading
+- Number of rings
+- Number of stakes
 
 ## Actions:
 - Drive Forward
