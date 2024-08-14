@@ -1,6 +1,7 @@
 import tkinter as tk
 import numpy as np
 import gym
+from gym import spaces
 import math
 import time
 from helper import convert_coord, calculate_front_position, calculate_back_position
@@ -8,8 +9,14 @@ import keyboard
 
 
 class Field(gym.Env):
-    def __init__(self):
+    def __init__(self, display=False, actions=[]):
         super(Field, self).__init__()
+
+        self.action_space = spaces.Discrete(5)  # Forward, Backward, Left, Right, Drop
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(5,), dtype=np.float32)
+
+        self.actions = actions
+        self.action = 0
         
         self.score = 0
         self.collided = False
@@ -18,7 +25,7 @@ class Field(gym.Env):
         self.grid = np.zeros(self.grid_size)
 
         # Initialize Bot
-        self.bot = Bot([15, 15], [-60, 0], 90)
+        self.bot = Bot([15, 15], [-48, 0], 0)
 
         # Initialize Obstacles
         self.obstacles = [(-24, 0), (0, 24), (24, 0), (0, -24)]
@@ -38,7 +45,30 @@ class Field(gym.Env):
         stakes = [(-48, 24), (-48, -24), (48, 0), (60, 24), (60, -24)]
         for i in stakes:
             self.stakes.append(Stake(i, 6))
+        
+        self.display = display
+        
+        if display:
+            self.window = tk.Tk()
+            self.window.title("VRC Field")
 
+            scale_factor = 5
+            # Create a canvas
+            self.canvas = tk.Canvas(self.window, width=self.grid_size[1]*scale_factor, height=self.grid_size[0]*scale_factor)
+            self.canvas.pack()
+            self.status_label = tk.Label(self.window, text="", anchor="w", justify="left")
+            self.status_label.pack(fill=tk.X)
+            self.render()
+        
+        else:
+            self.window = None
+            self.canvas = None
+            self.status_label = None
+
+    """
+    ML Section
+    --------------------------------
+    """
     def reset(self):
         self.score = 0
         self.collided = False
@@ -67,9 +97,61 @@ class Field(gym.Env):
         stakes = [(-48, 24), (-48, -24), (48, 0), (60, 24), (60, -24)]
         for i in stakes:
             self.stakes.append(Stake(i, 6))
-        self.visualize_gui()
-
     
+    def step(self, action):
+        # Implement action effects
+        if action == 0:
+            self.bot.drive_forwards()
+        elif action == 1:
+            self.bot.drive_backwards()
+        elif action == 2:
+            self.bot.turn_ccw()
+        elif action == 3:
+            self.bot.turn_cw()
+        elif action == 4:
+            self.bot.drop()
+            
+        self.update_position()
+
+        reward = self._calculate_reward()
+        done = self._check_done()
+
+        return self._get_obs(), reward, done, {}
+    
+    def _get_obs(self):
+        # Return observation state (you'll need to define what your state representation is)
+        return np.array([
+            self.bot.position[0], 
+            self.bot.position[1], 
+            self.bot.heading,
+            self.bot.rings_held,
+            int(self.bot.has_stake is not None)
+        ])
+
+    def _calculate_reward(self):
+        reward = 0
+        if self.collided:
+            reward = -100
+        else:
+            reward += self.score * 10
+            reward += self.bot.rings_held
+            if self.bot.has_stake:
+                reward += 2
+            reward -= self.timer * 0.0001
+        return reward
+    
+    def _check_done(self):
+        return (self.timer >= 60000) or (self.collided)
+    
+    def close(self):
+        if self.window is not None:
+            self.window.quit()
+            print("Game Over")
+
+    """
+    Game Section
+    --------------------------------
+    """
     def update_score(self):
         score = 0
         for stake in self.stakes:
@@ -112,9 +194,6 @@ class Field(gym.Env):
         canvas.create_polygon(rotated_corners, fill="cyan", outline='black', tags="bot")
 
         x, y = convert_coord(self.grid_size, (x, y))
-        # canvas.create_text(x*5, x*5, 
-        #                text=str(self.bot.rings_held), fill="gold", font=("Arial", 20, "bold"), tags="bot")
-
         front_mid_x = (rotated_corners[3][0] + rotated_corners[0][0]) / 2
         front_mid_y = (rotated_corners[3][1] + rotated_corners[0][1]) / 2
 
@@ -241,57 +320,88 @@ class Field(gym.Env):
         stake.is_possessed = True
         self.bot.rings_held = stake.add_rings(self.bot.rings_held)
         stake.position = (back_x, back_y)
+    
+    def handle_key_press(self, event):
+        action = ""
+        if event.keysym == "w":
+            action = "forward"
+        elif event.keysym == "s":
+            action = "backward"
+        elif event.keysym == "a":
+            action = "left"
+        elif event.keysym == "d":
+            action = "right"
+        elif event.keysym == "q":
+            action = "drop"
+        
+        if action == "forward":
+            self.bot.drive_forwards()
+        elif action == "backward":
+            self.bot.drive_backwards()
+        elif action == "left":
+            self.bot.turn_ccw()
+        elif action == "right":
+            self.bot.turn_cw()
+        elif action == "drop":
+            self.bot.drop()
 
-    def update_position(self, window, canvas, status_label, action="", scale_factor=5):
+    def update_position(self):
         delay = 100
-        # Action
         # Only for User Testing
-        def handle_key_press(event):
-            action = ""
-            if event.keysym == "w":
-                action = "forward"
-            elif event.keysym == "s":
-                action = "backward"
-            elif event.keysym == "a":
-                action = "left"
-            elif event.keysym == "d":
-                action = "right"
-            elif event.keysym == "q":
-                action = "drop"
-            
-            if action == "forward":
-                self.bot.drive_forwards()
-            elif action == "backward":
-                self.bot.drive_backwards()
-            elif action == "left":
-                self.bot.turn_ccw()
-            elif action == "right":
-                self.bot.turn_cw()
-            elif action == "drop":
-                self.bot.drop()
-
-        window.bind("<KeyPress>", handle_key_press)
-            
+        # window.bind("<KeyPress>", self.handle_key_press())
 
         # Check for collisions
         self.collided = self.check_collision()
         self.check_ring_collision()
         self.check_stake_collision()
 
+        if self.bot.rings_held > 3:
+            self.collided = True
+        
         if self.collided:
-            print("Collision detected!")
-            self.reset()
+            self.close()
             return
 
         if self.bot.has_stake:
             self.stake_possession(self.bot.has_stake)
+        
+        
+        self.update_score()
 
-        # Clear previous bot rectangle
-        canvas.delete("bot")
+        if self.display:
+            self.update_render()
+       
+        # Schedule the next update
+        self.timer += delay
+        if self.timer >= 60000:
+            self.close()
+            return
+        
+    def update_render(self, delay=100, action="", scale_factor=5):
+        canvas = self.canvas
+        window = self.window
+        status_label = self.status_label
 
-        # Draw the bot as a rectangle
+        if self.action >= len(self.actions):
+            return
+
+        action = self.actions[self.action]
+        self.action += 1
+
+        if action == 0:
+            self.bot.drive_forwards()
+        elif action == 1:
+            self.bot.drive_backwards()
+        elif action == 2:
+            self.bot.turn_ccw()
+        elif action == 3:
+            self.bot.turn_cw()
+        elif action == 4:
+            self.bot.drop()
+
+        self.canvas.delete("bot")
         self.draw_rectangle(
-            canvas,
+            self.canvas,
             self.bot.position[0],
             self.bot.position[1],
             self.bot.size[0],
@@ -299,33 +409,20 @@ class Field(gym.Env):
             self.bot.heading
         )
 
-        canvas.delete("ring")
-        self.draw_rings(canvas)
-        canvas.delete("stake")
-        self.draw_stakes(canvas)
+        self.canvas.delete("ring")
+        self.draw_rings(self.canvas)
+        self.canvas.delete("stake")
+        self.draw_stakes(self.canvas)
 
-        self.update_score()
-
+        # Update the status label
         status_text = f"Bot Position: {self.bot.position}, Heading: {self.bot.heading}\n"
-        status_text += f"Rings Held: {self.bot.rings_held}, Time (s): {self.timer//1000}, Score: {self.score}\n"
+        status_text += f"Rings Held: {self.bot.rings_held}, Time (s): {self.timer//1000}, Score: {self.score}\n, Reward: {self._calculate_reward()}"
         status_label.config(text=status_text)
 
-        # Schedule the next update
-        self.timer += delay
-        if self.timer >= 60000:
-            return
-        window.after(delay, self.update_position, window, canvas, status_label, action, scale_factor)  # Update every 1 ms
-        
+        self.window.after(delay, self.update_position)  # Update every 1 ms
 
-    def visualize_gui(self):
-        window = tk.Tk()
-        window.title("VRC Field")
-
+    def render(self):
         scale_factor = 5
-
-        # Create a canvas
-        canvas = tk.Canvas(window, width=self.grid_size[1]*scale_factor, height=self.grid_size[0]*scale_factor)
-        canvas.pack()
 
         # Draw the grid
         for i in range(self.grid_size[0]):
@@ -334,8 +431,9 @@ class Field(gym.Env):
                 y1 = i * 24 * scale_factor
                 x2 = x1 + 24 * scale_factor
                 y2 = y1 + 24 * scale_factor
-                canvas.create_rectangle(x1, y1, x2, y2, fill="gray70", outline='black')
-
+                self.canvas.create_rectangle(x1, y1, x2, y2, fill="gray70", outline='black')
+        
+        # Draw obstacles
         for obstacle in self.obstacles:
             x, y = convert_coord(self.grid_size, obstacle.position)
             radius = obstacle.size
@@ -343,15 +441,10 @@ class Field(gym.Env):
             y1 = (y - radius) * scale_factor
             x2 = (x + radius) * scale_factor
             y2 = (y + radius) * scale_factor
-            canvas.create_oval(x1, y1, x2, y2, fill="black", outline='black')
+            self.canvas.create_oval(x1, y1, x2, y2, fill="black", outline='black')
 
-        # Start updating the position
-        status_label = tk.Label(window, text="Test", anchor="w", justify="left")
-        status_label.pack(fill=tk.X)
-
-        self.update_position(window, canvas, status_label, action="", scale_factor=5)
-        window.mainloop()
-        return
+        self.update_position()
+        self.window.mainloop()
 
 
 class Bot:
@@ -363,10 +456,10 @@ class Bot:
         self.heading = heading
 
         # Possession
-        self.rings_held = 1
+        self.rings_held = 0
         self.has_stake = None
 
-        self.speed = 3
+        self.speed = 2
 
     def drive_forwards(self):
         rad = math.radians(self.heading)
@@ -394,7 +487,6 @@ class Bot:
 
         self.has_stake.is_possessed = False
         self.has_stake.position = (self.has_stake.position[0] - math.sin(math.radians(self.heading)), self.has_stake.position[1] - math.cos(math.radians(self.heading)))
-        print(self.has_stake.position)
         self.has_stake = None
         return
 
@@ -430,6 +522,7 @@ class Stake:
             return rings
         return 0
 
+# Testing Purposes Only
 
-env = Field()
-
+# actions = [0 for _ in range(1000)]
+# env = Field(display=False, actions=actions)
