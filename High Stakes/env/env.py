@@ -1,22 +1,25 @@
 import tkinter as tk
+import pygame
 import numpy as np
 import gym
 from gym import spaces
 import math
 import time
 from helper import convert_coord, calculate_front_position, calculate_back_position
-import keyboard
-
+import sys
 
 class Field(gym.Env):
-    def __init__(self, display=False, actions=[]):
+    def __init__(self, display=False, actions=[], human=False):
         super(Field, self).__init__()
 
         self.action_space = spaces.Discrete(5)  # Forward, Backward, Left, Right, Drop
-        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(5,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=-72, high=72, shape=[145, 145, 36, 4, 2], dtype=np.float32)
 
         self.actions = actions
         self.action = 0
+        self.human = human
+
+        self.done = False
         
         self.score = 0
         self.collided = False
@@ -37,7 +40,6 @@ class Field(gym.Env):
         red_rings = [(-60, 48), (-48, 60), (-48, 48), (-60, -48), (-48, -60), (-48, -48), (0, 0), (0, 60), (0, -60), (-24, 24), (-24, -24), (24, 24), (24, -24), (-24, 48), (-24, -48), (24, 48), (24, -48), (60, 48), (48, 60), (48, 48), (60, -48), (48, -60), (48, -48)]
         blue_rings = [] # Future Update
         for i in red_rings:
-            # coord = convert_coord(self.grid_size, i)
             self.rings.append(Ring(i, 4, "red"))
 
         # Initialize Stakes
@@ -49,21 +51,13 @@ class Field(gym.Env):
         self.display = display
         
         if display:
-            self.window = tk.Tk()
-            self.window.title("VRC Field")
-
-            scale_factor = 5
-            # Create a canvas
-            self.canvas = tk.Canvas(self.window, width=self.grid_size[1]*scale_factor, height=self.grid_size[0]*scale_factor)
-            self.canvas.pack()
-            self.status_label = tk.Label(self.window, text="", anchor="w", justify="left")
-            self.status_label.pack(fill=tk.X)
+            pygame.init()
+            self.scale_factor = 4
+            self.cell_size = 24
+            self.screen = pygame.display.set_mode((self.grid_size[1] * self.scale_factor, self.grid_size[0] * self.scale_factor))
+            pygame.display.set_caption("VRC Field")
+            self.font = pygame.font.SysFont("Arial", 12)
             self.render()
-        
-        else:
-            self.window = None
-            self.canvas = None
-            self.status_label = None
 
     """
     ML Section
@@ -77,7 +71,7 @@ class Field(gym.Env):
         self.grid = np.zeros(self.grid_size)
 
         # Initialize Bot
-        self.bot = Bot([15, 15], [-60, 0], 90)
+        self.bot = Bot([15, 15], [-48, 0], 0)
 
         # Initialize Obstacles
         self.obstacles = [(-24, 0), (0, 24), (24, 0), (0, -24)]
@@ -120,13 +114,13 @@ class Field(gym.Env):
     
     def _get_obs(self):
         # Return observation state (you'll need to define what your state representation is)
-        return np.array([
+        return [
             self.bot.position[0], 
             self.bot.position[1], 
             self.bot.heading,
-            self.bot.rings_held,
+            int(self.bot.rings_held),
             int(self.bot.has_stake is not None)
-        ])
+        ]
 
     def _calculate_reward(self):
         reward = 0
@@ -137,16 +131,17 @@ class Field(gym.Env):
             reward += self.bot.rings_held
             if self.bot.has_stake:
                 reward += 2
-            reward -= self.timer * 0.0001
+            reward -= 0.0001 # * self.timer
         return reward
     
     def _check_done(self):
-        return (self.timer >= 60000) or (self.collided)
+        return (self.timer >= 60000) or (self.collided) or (self.done)
     
     def close(self):
-        if self.window is not None:
-            self.window.quit()
+        if self.display:
+            pygame.quit()
             print("Game Over")
+
 
     """
     Game Section
@@ -163,11 +158,8 @@ class Field(gym.Env):
         self.score = score
         return
 
-    def draw_rectangle(self, canvas, x, y, width, height, angle):
-        # Convert the angle to radians and adjust for coordinate system
+    def draw_rectangle(self, x, y, width, height, angle):
         angle_rad = math.radians(angle+90)
-
-        # Define the corner points of the rectangle relative to its center
         half_width = width / 2
         half_height = height / 2
         corners = [
@@ -176,55 +168,51 @@ class Field(gym.Env):
             (half_width, half_height),  # Bottom-right
             (-half_width, half_height)  # Bottom-left
         ]
-        # Rotate and translate corners
         rotated_corners = []
         for cx, cy in corners:
-            # Rotate each corner point around the center (x, y)
             x_rot = cx * math.cos(angle_rad) + cy * math.sin(angle_rad)
             y_rot = -cx * math.sin(angle_rad) + cy * math.cos(angle_rad)
-
-            # Translate the rotated point to the bot's current position
             x_rot += x
             y_rot += y
-
             new_x, new_y = convert_coord(self.grid_size, (x_rot, y_rot))
-            rotated_corners.append((new_x*5, new_y*5))
-
-        # Draw the rotated rectangle
-        canvas.create_polygon(rotated_corners, fill="cyan", outline='black', tags="bot")
-
-        x, y = convert_coord(self.grid_size, (x, y))
+            rotated_corners.append((new_x * self.scale_factor, new_y * self.scale_factor))
+        pygame.draw.polygon(self.screen, (0, 255, 255), rotated_corners)
         front_mid_x = (rotated_corners[3][0] + rotated_corners[0][0]) / 2
         front_mid_y = (rotated_corners[3][1] + rotated_corners[0][1]) / 2
+        text_surface = self.font.render("F", True, (255, 255, 255))
+        self.screen.blit(text_surface, (front_mid_x, front_mid_y))
 
-        # Draw a small label or mark on the front side
-        canvas.create_text(front_mid_x, front_mid_y, text="F", fill="white", font=("Arial", 12, "bold"), tags="bot")
+    def draw_obstacles(self):
+        for obstacle in self.obstacles:
+            x, y = convert_coord(self.grid_size, obstacle.position)
+            x1 = (x - obstacle.size) * self.scale_factor
+            y1 = (y - obstacle.size) * self.scale_factor
+            x2 = (x + obstacle.size) * self.scale_factor
+            y2 = (y + obstacle.size) * self.scale_factor
+            pygame.draw.ellipse(self.screen, (0, 0, 0), [x1, y1, x2 - x1, y2 - y1])
 
-    def draw_rings(self, canvas):
+    def draw_rings(self):
         for ring in self.rings:
             ring_x, ring_y = convert_coord(self.grid_size, ring.position)
-            x1 = (ring_x - ring.size) * 5
-            y1 = (ring_y - ring.size) * 5
-            x2 = (ring_x + ring.size) * 5
-            y2 = (ring_y + ring.size) * 5
-            canvas.create_oval(x1, y1, x2, y2, fill="red", outline='red', tags="ring")
-    
-    def draw_stakes(self, canvas):
+            x1 = (ring_x - ring.size) * self.scale_factor
+            y1 = (ring_y - ring.size) * self.scale_factor
+            x2 = (ring_x + ring.size) * self.scale_factor
+            y2 = (ring_y + ring.size) * self.scale_factor
+            pygame.draw.ellipse(self.screen, (255, 0, 0), [x1, y1, x2 - x1, y2 - y1])
+
+    def draw_stakes(self):
         for stake in self.stakes:
             x, y = convert_coord(self.grid_size, stake.position)
-
-            # Hexagon Coordinates
-            x1, y1 = x * 5, (y + stake.size) * 5
-            x2, y2 = (x + stake.size*math.cos(math.radians(30))) * 5, (y + stake.size*math.sin(math.radians(30))) * 5
-            x3, y3 = (x + stake.size*math.cos(math.radians(30))) * 5, (y - stake.size*math.sin(math.radians(30))) * 5
-            x4, y4 = x * 5, (y - stake.size) * 5
-            x5, y5 = (x - stake.size*math.cos(math.radians(30))) * 5, (y - stake.size*math.sin(math.radians(30))) * 5
-            x6, y6 = (x - stake.size*math.cos(math.radians(30))) * 5, (y + stake.size*math.sin(math.radians(30))) * 5
-
-            coords = ((x1, y1), (x2, y2), (x3, y3), (x4, y4), (x5, y5), (x6, y6))
-            canvas.create_polygon(coords, fill="gold", outline='black', tags="stake")
-            canvas.create_text(x*5, y*5, text=str(stake.num_rings), fill="red", font=("Arial", 12, "bold"), tags="stake")
-
+            x1, y1 = x * self.scale_factor, (y + stake.size) * self.scale_factor
+            x2, y2 = (x + stake.size * math.cos(math.radians(30))) * self.scale_factor, (y + stake.size * math.sin(math.radians(30))) * self.scale_factor
+            x3, y3 = (x + stake.size * math.cos(math.radians(30))) * self.scale_factor, (y - stake.size * math.sin(math.radians(30))) * self.scale_factor
+            x4, y4 = x * self.scale_factor, (y - stake.size) * self.scale_factor
+            x5, y5 = (x - stake.size * math.cos(math.radians(30))) * self.scale_factor, (y - stake.size * math.sin(math.radians(30))) * self.scale_factor
+            x6, y6 = (x - stake.size * math.cos(math.radians(30))) * self.scale_factor, (y + stake.size * math.sin(math.radians(30))) * self.scale_factor
+            coords = [(x1, y1), (x2, y2), (x3, y3), (x4, y4), (x5, y5), (x6, y6)]
+            pygame.draw.polygon(self.screen, (255, 215, 0), coords)
+            text_surface = self.font.render(str(stake.num_rings), True, (255, 0, 0))
+            self.screen.blit(text_surface, (x * self.scale_factor, y * self.scale_factor))
     
     def check_ring_collision(self):
         for ring in self.rings:
@@ -321,131 +309,111 @@ class Field(gym.Env):
         self.bot.rings_held = stake.add_rings(self.bot.rings_held)
         stake.position = (back_x, back_y)
     
-    def handle_key_press(self, event):
-        action = ""
-        if event.keysym == "w":
-            action = "forward"
-        elif event.keysym == "s":
-            action = "backward"
-        elif event.keysym == "a":
-            action = "left"
-        elif event.keysym == "d":
-            action = "right"
-        elif event.keysym == "q":
-            action = "drop"
-        
-        if action == "forward":
+    def handle_key_press(self):
+        keys = pygame.key.get_pressed()
+        if keys[pygame.K_w]:
             self.bot.drive_forwards()
-        elif action == "backward":
+        elif keys[pygame.K_s]:
             self.bot.drive_backwards()
-        elif action == "left":
+        elif keys[pygame.K_a]:
             self.bot.turn_ccw()
-        elif action == "right":
+        elif keys[pygame.K_d]:
             self.bot.turn_cw()
-        elif action == "drop":
+        elif keys[pygame.K_q]:
             self.bot.drop()
 
     def update_position(self):
-        delay = 100
-        # Only for User Testing
-        # window.bind("<KeyPress>", self.handle_key_press())
+        if self.actions:
+            if self.action >= len(self.actions):
+                self.done = True
+                return
 
-        # Check for collisions
+            action = self.actions[self.action]
+            self.action += 1
+
+            if action == 0:
+                self.bot.drive_forwards()
+            elif action == 1:
+                self.bot.drive_backwards()
+            elif action == 2:
+                self.bot.turn_ccw()
+            elif action == 3:
+                self.bot.turn_cw()
+            elif action == 4:
+                self.bot.drop()
+        delay = 100
+        # self.handle_key_press()
         self.collided = self.check_collision()
         self.check_ring_collision()
         self.check_stake_collision()
 
         if self.bot.rings_held > 3:
             self.collided = True
-        
-        if self.collided:
-            self.close()
-            return
+
+        # if self.collided:
+        #     self.close()
+        #     return
 
         if self.bot.has_stake:
             self.stake_possession(self.bot.has_stake)
-        
-        
+
         self.update_score()
 
         if self.display:
             self.update_render()
-       
-        # Schedule the next update
+
         self.timer += delay
-        if self.timer >= 60000:
-            self.close()
-            return
+        # if self.timer >= 60000:
+        #     self.close()
+        #     return
+
+    def update_render(self):
+
+        self.screen.fill((169, 169, 169))  # Background color
+        for i in range(self.grid_size[0]):
+            for j in range(self.grid_size[1]):
+                x1 = j * self.cell_size * self.scale_factor
+                y1 = i * self.cell_size * self.scale_factor
+                rect = pygame.Rect(x1, y1, self.cell_size * self.scale_factor, self.cell_size * self.scale_factor)
+
+                # Draw the filled rectangle
+                pygame.draw.rect(self.screen, (190, 190, 190), rect)  # Gray color fill
+
+                # Draw the outline
+                pygame.draw.rect(self.screen, (0, 0, 0), rect, 1)  # Black color outline, 1-pixel thick
         
-    def update_render(self, delay=100, action="", scale_factor=5):
-        canvas = self.canvas
-        window = self.window
-        status_label = self.status_label
-
-        if self.action >= len(self.actions):
-            return
-
-        action = self.actions[self.action]
-        self.action += 1
-
-        if action == 0:
-            self.bot.drive_forwards()
-        elif action == 1:
-            self.bot.drive_backwards()
-        elif action == 2:
-            self.bot.turn_ccw()
-        elif action == 3:
-            self.bot.turn_cw()
-        elif action == 4:
-            self.bot.drop()
-
-        self.canvas.delete("bot")
         self.draw_rectangle(
-            self.canvas,
             self.bot.position[0],
             self.bot.position[1],
             self.bot.size[0],
             self.bot.size[1],
             self.bot.heading
         )
-
-        self.canvas.delete("ring")
-        self.draw_rings(self.canvas)
-        self.canvas.delete("stake")
-        self.draw_stakes(self.canvas)
-
-        # Update the status label
+        self.draw_rings()
+        self.draw_stakes()
+        self.draw_obstacles()
+        
         status_text = f"Bot Position: {self.bot.position}, Heading: {self.bot.heading}\n"
         status_text += f"Rings Held: {self.bot.rings_held}, Time (s): {self.timer//1000}, Score: {self.score}\n, Reward: {self._calculate_reward()}"
-        status_label.config(text=status_text)
-
-        self.window.after(delay, self.update_position)  # Update every 1 ms
+        text_surface = self.font.render(status_text, True, (0, 0, 0))
+        self.screen.blit(text_surface, (10, 10))
+        pygame.display.flip()
 
     def render(self):
-        scale_factor = 5
-
-        # Draw the grid
-        for i in range(self.grid_size[0]):
-            for j in range(self.grid_size[1]):
-                x1 = j * 24 * scale_factor
-                y1 = i * 24 * scale_factor
-                x2 = x1 + 24 * scale_factor
-                y2 = y1 + 24 * scale_factor
-                self.canvas.create_rectangle(x1, y1, x2, y2, fill="gray70", outline='black')
-        
-        # Draw obstacles
-        for obstacle in self.obstacles:
-            x, y = convert_coord(self.grid_size, obstacle.position)
-            radius = obstacle.size
-            x1 = (x - radius) * scale_factor
-            y1 = (y - radius) * scale_factor
-            x2 = (x + radius) * scale_factor
-            y2 = (y + radius) * scale_factor
-            self.canvas.create_oval(x1, y1, x2, y2, fill="black", outline='black')
-
-        self.update_position()
-        self.window.mainloop()
-
+        running = True
+        while running:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+            if self._check_done():
+                running = False
+            if self.human:
+                self.handle_key_press()
+            self.update_position()
+            # self.update_render()
+            # print(self._get_obs())
+            pygame.time.delay(10)
+        self.close()
 
 class Bot:
     def __init__(self, size=(15, 15), start_pos=(0,0), heading=0):
@@ -465,12 +433,16 @@ class Bot:
         rad = math.radians(self.heading)
         self.position[0] += self.speed*math.sin(rad)
         self.position[1] += self.speed*math.cos(rad)
+        self.position[0] = round(self.position[0], 2)
+        self.position[1] = round(self.position[1], 2)
         return
 
     def drive_backwards(self):
         rad = math.radians(self.heading)
         self.position[0] -= self.speed*math.sin(rad)
         self.position[1] -= self.speed*math.cos(rad)
+        self.position[0] = round(self.position[0], 2)
+        self.position[1] = round(self.position[1], 2)
         return
 
     def turn_cw(self):
@@ -496,13 +468,11 @@ class Obstacle:
         self.position = position
         self.size = size
 
-
 class Ring:
     def __init__(self, position, size, color):
         self.position = position
         self.size = size
         self.color = color
-
 
 class Stake:
     def __init__(self, position, size, max_rings=6, mobile=True):
@@ -522,7 +492,7 @@ class Stake:
             return rings
         return 0
 
-# Testing Purposes Only
-
-# actions = [0 for _ in range(1000)]
-# env = Field(display=False, actions=actions)
+if __name__ == "__main__":
+    field = Field(display=True, human=True)
+    # field = Field(display=True, actions = [1, 2, 0, 0, 0, 2, 3, 2, 4, 0, 0, 2, 3, 0, 0, 0, 3, 1, 3, 1, 4, 4, 1, 0, 4, 4, 3, 0, 3, 3, 1, 1, 1, 1, 3, 2, 3, 2, 3, 2, 3, 3, 3, 1, 1, 1, 0, 1, 4, 4, 0, 1, 4, 0, 1, 4, 4, 0, 1, 4, 0, 1, 4, 4, 0, 1, 4, 0, 1, 4, 0, 1, 4, 0, 1, 4, 0, 1, 4, 4, 0, 1, 4, 0, 1, 4, 0, 1, 4, 0, 1, 4, 0, 1, 4, 0, 1, 4, 0, 1, 4, 0, 1, 4, 0, 1, 4, 0, 1, 4, 0, 1, 4, 0, 1, 4, 0, 1, 4, 0, 1, 4, 0, 1, 4, 0, 1, 4, 0, 1, 4, 0, 1, 4, 0, 1, 4, 0, 1, 4, 0, 1, 4, 0, 1, 4, 0, 1, 4, 0, 1, 4, 0, 1, 4, 1, 1, 3, 3, 0, 4, 3, 0, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 4, 3, 2, 4, 3, 2, 4, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 4, 2, 4, 3, 4, 2, 4, 3, 4, 2, 4, 3, 4, 2, 4, 3, 4, 2, 4, 3, 4, 2, 4, 3, 4, 2, 4, 3, 4, 2, 4, 3, 4, 2, 4, 1, 3, 2, 3, 2, 3, 1, 1, 0, 4, 4, 4, 4, 1, 0, 4, 4, 4, 3, 4, 4, 4, 4, 4, 3, 3, 3, 1, 0, 2, 2, 2, 1, 3, 0, 2, 1, 3, 0, 2, 1, 3, 0, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 0, 3, 3, 0, 3, 1, 2, 1, 1, 2, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2, 4, 3, 2])
+    

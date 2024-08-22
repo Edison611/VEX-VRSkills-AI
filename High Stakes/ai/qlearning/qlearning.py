@@ -45,12 +45,10 @@ class QLearning:
             print("reward:", reward)
             print("next_state:", next_state)
 
-
-
 def get_discrete_state(x, y, heading, num_rings, stake, grid_size):
     # Convert the continuous position to discrete state
     x, y = int(x), int(y)
-    x, y = x + grid_size[0] // 2, grid_size[1] // 2 - y
+    x, y = x + grid_size[0] // 2, y + grid_size[1] // 2
     # Convert the continuous heading to discrete state
     heading = int(heading)
     heading = heading % 360
@@ -69,7 +67,7 @@ with open("/Users/edisony611/PycharmProjects/VEX-VRSkills-AI/High Stakes/ai/qlea
 cur_episode = config["cur_episode"]
 
 # Initialize the Q-Learning agent and most recent table
-agent = QLearning(state_size=[144, 144, 36, 4, 2], action_size=5)
+agent = QLearning(state_size=[145, 145, 36, 4, 2], action_size=5)
 try:
     agent.q_table = np.load(f"/Users/edisony611/PycharmProjects/VEX-VRSkills-AI/High Stakes/ai/qlearning/qtables/q_table_{cur_episode}.npy")
 except FileNotFoundError:
@@ -78,11 +76,11 @@ except FileNotFoundError:
 
 episodes = 10000000
 
-SHOW_EVERY = 1000
-LOG_EVERY = 1000
+SHOW_EVERY = 100
+LOG_EVERY = 100
 SAVE_EVERY = 10000
 
-for episode in range(cur_episode, episodes+1):
+for episode in range(cur_episode+1, episodes+1):
     env.reset()
     done = False
     total_reward = 0
@@ -91,8 +89,12 @@ for episode in range(cur_episode, episodes+1):
     state = get_discrete_state(state[0], state[1], state[2], state[3], state[4], env.grid_size)
 
     render = False
+
+    states = []
     
     while not done:
+        # printable_state = [state[0] - env.grid_size[0] // 2, env.grid_size[1] // 2 - state[1], state[2] * 10, state[3], state[4]]
+        # states.append(printable_state)
         action = agent.choose_action(state)
         actions.append(action)
 
@@ -103,16 +105,19 @@ for episode in range(cur_episode, episodes+1):
 
         state = new_discrete_state
         total_reward += reward
+        
 
-    # print(f"Episode {episode + 1}, Total Reward: {total_reward}")
     if episode % SAVE_EVERY == 0:
         np.save(f"/Users/edisony611/PycharmProjects/VEX-VRSkills-AI/High Stakes/ai/qlearning/qtables/q_table_{episode}.npy", agent.q_table)
         table = json.dumps({"cur_episode": episode})
         with open("/Users/edisony611/PycharmProjects/VEX-VRSkills-AI/High Stakes/ai/qlearning/config.json", "w") as f:
             f.write(table)
-    if episode % LOG_EVERY == 0:
-        print(new_discrete_state)
+    if episode % LOG_EVERY == 0 or render:
         print(f"Episode {episode}, Reward: {reward}, Total Reward: {total_reward}")
         print(actions)
+        # print(states)
+        # for s in states:
+        #     print(s)
+        print("----------------------------------------")
     if render or episode % SHOW_EVERY == 0:
         env.render_env = Field(display=True, actions=actions)
