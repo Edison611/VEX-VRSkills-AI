@@ -11,47 +11,23 @@ import sys
 class Field(gym.Env):
     def __init__(self, display=False, actions=[], human=False):
         super(Field, self).__init__()
+        pygame.init()
 
         self.action_space = spaces.Discrete(5)  # Forward, Backward, Left, Right, Drop
-        self.observation_space = spaces.Box(low=-72, high=72, shape=[145, 145, 36, 4, 2], dtype=np.float32)
+        self.observation_space = spaces.Box(low=np.array([-72, -72, 0, 0, 0]), high=np.array([72, 72, 35, 3, 1]), shape=(5,), dtype=np.float32)
 
         self.actions = actions
         self.action = 0
         self.human = human
 
-        self.done = False
-        
-        self.score = 0
-        self.collided = False
-        self.timer = 0
         self.grid_size = [144, 144]
         self.grid = np.zeros(self.grid_size)
-
-        # Initialize Bot
-        self.bot = Bot([15, 15], [-48, 0], 0)
-
-        # Initialize Obstacles
-        self.obstacles = [(-24, 0), (0, 24), (24, 0), (0, -24)]
-        for i in range(len(self.obstacles)):
-            self.obstacles[i] = Obstacle(self.obstacles[i], 5)
-
-        # Initialize Rings
-        self.rings = []
-        red_rings = [(-60, 48), (-48, 60), (-48, 48), (-60, -48), (-48, -60), (-48, -48), (0, 0), (0, 60), (0, -60), (-24, 24), (-24, -24), (24, 24), (24, -24), (-24, 48), (-24, -48), (24, 48), (24, -48), (60, 48), (48, 60), (48, 48), (60, -48), (48, -60), (48, -48)]
-        blue_rings = [] # Future Update
-        for i in red_rings:
-            self.rings.append(Ring(i, 4, "red"))
-
-        # Initialize Stakes
-        self.stakes = []
-        stakes = [(-48, 24), (-48, -24), (48, 0), (60, 24), (60, -24)]
-        for i in stakes:
-            self.stakes.append(Stake(i, 6))
         
         self.display = display
+
+        self.reset()
         
-        if display:
-            pygame.init()
+        if self.display:
             self.scale_factor = 4
             self.cell_size = 24
             self.screen = pygame.display.set_mode((self.grid_size[1] * self.scale_factor, self.grid_size[0] * self.scale_factor))
@@ -64,17 +40,23 @@ class Field(gym.Env):
     --------------------------------
     """
     def reset(self):
+        self.done = False
         self.score = 0
         self.collided = False
         self.timer = 0
-        self.grid_size = [144, 144]
-        self.grid = np.zeros(self.grid_size)
+
+        self.prev_reward = 0
+        self.prev_num_rings = 0
+        self.prev_score = 0
+        self.stake_possess_time = 0
+
+        self.visited = set()
 
         # Initialize Bot
         self.bot = Bot([15, 15], [-48, 0], 0)
 
         # Initialize Obstacles
-        self.obstacles = [(-24, 0), (0, 24), (24, 0), (0, -24)]
+        self.obstacles = []# [(-24, 0), (0, 24), (24, 0), (0, -24)]
         for i in range(len(self.obstacles)):
             self.obstacles[i] = Obstacle(self.obstacles[i], 5)
 
@@ -91,6 +73,8 @@ class Field(gym.Env):
         stakes = [(-48, 24), (-48, -24), (48, 0), (60, 24), (60, -24)]
         for i in stakes:
             self.stakes.append(Stake(i, 6))
+        
+        return self._get_obs()
     
     def step(self, action):
         # Implement action effects
@@ -112,12 +96,20 @@ class Field(gym.Env):
 
         return self._get_obs(), reward, done, {}
     
+    def distance_to_closest_ring(self):
+        lowest = sys.maxsize
+        for ring in self.rings:
+            distance = math.sqrt((ring.position[0] - self.bot.position[0]) ** 2 + (ring.position[1] - self.bot.position[1]) ** 2)
+            if distance < lowest:
+                lowest = distance
+        return lowest
+    
     def _get_obs(self):
         # Return observation state (you'll need to define what your state representation is)
         return [
             self.bot.position[0], 
             self.bot.position[1], 
-            self.bot.heading,
+            (self.bot.heading % 360) // 10,
             int(self.bot.rings_held),
             int(self.bot.has_stake is not None)
         ]
@@ -127,12 +119,40 @@ class Field(gym.Env):
         if self.collided:
             reward = -100
         else:
-            reward += self.score * 10
-            reward += self.bot.rings_held
+
+            reward += (self.score - self.prev_score) * 5
+            reward += (self.bot.rings_held - self.prev_num_rings) * 2
             if self.bot.has_stake:
+                self.stake_possess_time += 0.1
+            else:
+                self.stake_possess_time = 0
+            
+            if self.stake_possess_time > 3:
                 reward += 2
-            reward -= 0.0001 # * self.timer
-        return reward
+                self.stake_possess_time = 0
+
+            # Encourage Ring Collection
+            # d_score = min(0.5, round(8 * 1 / self.distance_to_closest_ring(), 1))
+            # reward += d_score
+
+            # Encourage Exploration
+            if (int(self.bot.position[0]), int(self.bot.position[1])) not in self.visited:
+                reward += 1
+                # print((self.bot.position[0], self.bot.position[1]))
+                self.visited.add((int(self.bot.position[0]), int(self.bot.position[1])))
+
+            # Encourage Being Fast
+            # reward -= 1 # * self.timer
+
+            # Reward Range
+            # reward = np.interp(reward, (-0.1, 50), (0, 1))
+        
+        # total = reward - self.prev_reward
+        # self.prev_reward = reward
+        self.prev_num_rings = self.bot.rings_held
+        self.prev_score = self.score
+        
+        return reward   
     
     def _check_done(self):
         return (self.timer >= 60000) or (self.collided) or (self.done)
@@ -140,7 +160,6 @@ class Field(gym.Env):
     def close(self):
         if self.display:
             pygame.quit()
-            print("Game Over")
 
 
     """
@@ -341,6 +360,7 @@ class Field(gym.Env):
                 self.bot.turn_cw()
             elif action == 4:
                 self.bot.drop()
+
         delay = 100
         # self.handle_key_press()
         self.collided = self.check_collision()
@@ -358,9 +378,6 @@ class Field(gym.Env):
             self.stake_possession(self.bot.has_stake)
 
         self.update_score()
-
-        if self.display:
-            self.update_render()
 
         self.timer += delay
         # if self.timer >= 60000:
@@ -410,7 +427,7 @@ class Field(gym.Env):
             if self.human:
                 self.handle_key_press()
             self.update_position()
-            # self.update_render()
+            self.update_render()
             # print(self._get_obs())
             pygame.time.delay(10)
         self.close()
@@ -433,16 +450,16 @@ class Bot:
         rad = math.radians(self.heading)
         self.position[0] += self.speed*math.sin(rad)
         self.position[1] += self.speed*math.cos(rad)
-        self.position[0] = round(self.position[0], 2)
-        self.position[1] = round(self.position[1], 2)
+        self.position[0] = round(self.position[0], 1)
+        self.position[1] = round(self.position[1], 1)
         return
 
     def drive_backwards(self):
         rad = math.radians(self.heading)
         self.position[0] -= self.speed*math.sin(rad)
         self.position[1] -= self.speed*math.cos(rad)
-        self.position[0] = round(self.position[0], 2)
-        self.position[1] = round(self.position[1], 2)
+        self.position[0] = round(self.position[0], 1)
+        self.position[1] = round(self.position[1], 1)
         return
 
     def turn_cw(self):
