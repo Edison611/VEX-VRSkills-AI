@@ -20,3 +20,7 @@ This is only for the VEX High Stakes Skills with many features not implemented y
 - Turn Left
 - Drop Stake
 
+# v1.1 (DQN & PPO Experimentation)
+- Generic training using stable baselines library
+- Able to achieve low scores, but crashes into walls and could use some hyper-tuning
+- CPU trained
