@@ -1,3 +1,4 @@
+![til](./assets/sample.gif)
 # Goal
 The goal of this project is to find the most efficient skills path to take for VRC 2024-2025 High Stakes. In the future, it can also be used to potentially simulate meta bots facing each other. 
 
