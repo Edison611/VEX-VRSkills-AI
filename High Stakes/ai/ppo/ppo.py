@@ -1,10 +1,12 @@
 import sys
 import os
-directory = '/Users/edisony611/PycharmProjects/VEX-VRSkills-AI/High Stakes/env/'
+directory = r'c:\Users\ediso\Documents\Programming\Python\VEX-VRSkills-AI\High Stakes\env'
 sys.path.append(os.path.abspath(directory))
+
 from env import Field
 
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
+from stable_baselines3.common.monitor import Monitor
 from stable_baselines3 import PPO
 import time
 
@@ -14,10 +16,12 @@ logdir = f"High Stakes/ai/ppo/logs/{int(time.time())}"
 
 if __name__ == '__main__':
 	env = Field(display=False)
-	vec_env = SubprocVecEnv([env for _ in range(2)])
+	vec_env = SubprocVecEnv([lambda: Field() for _ in range(2)])
+
+	# vec_env = SubprocVecEnv([env for _ in range(2)])
 
 
-	train = True
+	train = False
 
 	if train:
 		if not os.path.exists(models_dir):
@@ -47,9 +51,10 @@ if __name__ == '__main__':
 			# 	Field(display=True, actions=actions)
 
 	else:
-		log_num = 1724957412
+		model_dir = r'c:\Users\ediso\Documents\Programming\Python\VEX-VRSkills-AI\High Stakes\High Stakes'
+		log_num = 1761021117
 		model_num = 700000
-		model_path = f"High Stakes/ai/ppo/models/{log_num}/{model_num}.zip"
+		model_path = model_dir + f"/ai/ppo/models/{log_num}/{model_num}.zip"
 		model = PPO.load(model_path, env=env)
 
 		episodes = 500
@@ -63,8 +68,8 @@ if __name__ == '__main__':
 				action, _ =	model.predict(obs)
 				actions.append(action)
 				obs, reward, done, info = env.step(action)
-				render = True
-				# if reward > 8:
-				# 	render = True
+				# render = True
+				if reward > 8:
+					render = True
 			if render:
 				Field(display=True, actions=actions)
